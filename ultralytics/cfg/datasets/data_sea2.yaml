@@ -1,0 +1,16 @@
+path: F:/yolov11attention/yolov11-attention/datasets_sea.2
+train: images/train
+val: images/val
+test: images/val
+
+names:
+  0: corals
+  1: cuttlefish
+  2: diver
+  3: echinus
+  4: fish
+  5: holothurian
+  6: jellyfish
+  7: scallop
+  8: starfish
+  9: turtle

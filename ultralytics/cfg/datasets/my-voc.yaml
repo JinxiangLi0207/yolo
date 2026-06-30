@@ -1,0 +1,18 @@
+# 自定义VOC数据集配置
+path: F:/yolov11attention/yolov11-attention/VOCdevkit
+train: images
+val: images
+test: images
+
+# Classes (实际只有10个类别)
+names:
+  0: aeroplane
+  1: bicycle
+  2: bird
+  3: boat
+  4: bottle
+  5: bus
+  6: car
+  7: cat
+  8: chair
+  9: cow

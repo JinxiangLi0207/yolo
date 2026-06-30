@@ -1,0 +1,39 @@
+# 训练结果和日志
+runs/
+log/
+
+# 大型数据集（单独上传）
+DUO/
+DUO.zip
+datasets_sea.2/
+VOCdevkit/
+
+# 预训练权重（从官方下载）
+weights/
+*.pt
+
+# Python缓存
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+*.egg
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+.claude/
+
+# 实验报告（可选上传）
+*实验报告*.md
+
+# 文档PDF
+*.pdf
+
+# Docker
+docker/
+
+# 其他
+*.bak_*
