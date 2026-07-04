@@ -1671,7 +1671,7 @@ def parse_model(d, ch, verbose=True):
     # attn_modules = frozenset({SE, CA,})  # 逐步加
     attn_modules = frozenset({SE, ECA, CA, SimAM, SK, BAM, A2, SLAM,
                               TripletAttention, CBAM, GAM, SCSA, EMA, ACmix, ELA,
-                              MSBlock, InceptionDWConvBlock, C2f_MSBlock, MSBlock_S})  # 逐步加
+                              MSBlock, InceptionDWConvBlock, C2f_MSBlock, MSBlock_S, UFE})  # 逐步加
 
     for i, (f, n, m, args) in enumerate(d["backbone"] + d["head"]):  # from, number, module, args
         m = (

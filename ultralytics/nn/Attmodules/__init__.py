@@ -14,3 +14,4 @@ from .ACmix import *
 from .ELA import *
 from .MS import *
 from .TripletAttention import *
+from .UFE import *
