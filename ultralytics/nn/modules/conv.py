@@ -25,6 +25,7 @@ __all__ = (
     "Index",
     "SPDConv",
     "MSFF",
+    "GatedMSFF",
 )
 
 
@@ -212,6 +213,61 @@ class MSFF(nn.Module):
 
         gate = torch.sigmoid(b3) * torch.sigmoid(b5) * torch.sigmoid(b7)
         y = x + x * gate
+
+        return self.proj(y)
+
+
+class GatedMSFF(nn.Module):
+    """
+    Gated-MSFF: gated residual multi-scale feature fusion.
+
+    This module is designed for the P3 small-object branch. Compared with MSFF,
+    it keeps the original feature as the main path and uses a learnable gate to
+    control how much multi-scale enhancement is injected.
+
+    Formula:
+        y = x + alpha * gate(x, msff(x)) * msff(x)
+
+    The gate helps avoid over-enhancing complex underwater background responses.
+    """
+
+    def __init__(self, c1, c2=None, reduction=16, init_alpha=0.1, act=True):
+        super().__init__()
+        c2 = c1 if c2 is None else c2
+        hidden = max(8, c1 // reduction)
+
+        self.avg = nn.AvgPool2d(kernel_size=3, stride=1, padding=1)
+
+        self.dw3_h = nn.Conv2d(c1, c1, kernel_size=(1, 3), stride=1, padding=(0, 1), groups=c1, bias=False)
+        self.dw3_v = nn.Conv2d(c1, c1, kernel_size=(3, 1), stride=1, padding=(1, 0), groups=c1, bias=False)
+
+        self.dw5_h = nn.Conv2d(c1, c1, kernel_size=(1, 5), stride=1, padding=(0, 2), groups=c1, bias=False)
+        self.dw5_v = nn.Conv2d(c1, c1, kernel_size=(5, 1), stride=1, padding=(2, 0), groups=c1, bias=False)
+
+        self.dw7_h = nn.Conv2d(c1, c1, kernel_size=(1, 7), stride=1, padding=(0, 3), groups=c1, bias=False)
+        self.dw7_v = nn.Conv2d(c1, c1, kernel_size=(7, 1), stride=1, padding=(3, 0), groups=c1, bias=False)
+
+        self.gate = nn.Sequential(
+            nn.Conv2d(c1 * 2, hidden, kernel_size=1, bias=False),
+            nn.BatchNorm2d(hidden),
+            nn.SiLU(inplace=True) if act is True else act if isinstance(act, nn.Module) else nn.Identity(),
+            nn.Conv2d(hidden, c1, kernel_size=1, bias=True),
+            nn.Sigmoid(),
+        )
+        self.alpha = nn.Parameter(torch.tensor(float(init_alpha)))
+        self.proj = nn.Identity() if c1 == c2 else Conv(c1, c2, k=1, s=1, act=act)
+
+    def forward(self, x):
+        z = self.avg(x)
+
+        b3 = self.dw3_v(self.dw3_h(z))
+        b5 = self.dw5_v(self.dw5_h(z))
+        b7 = self.dw7_v(self.dw7_h(z))
+
+        ms_gate = torch.sigmoid(b3) * torch.sigmoid(b5) * torch.sigmoid(b7)
+        ms_feat = x * ms_gate
+        gate = self.gate(torch.cat((x, ms_feat), dim=1))
+        y = x + self.alpha * gate * ms_feat
 
         return self.proj(y)
 

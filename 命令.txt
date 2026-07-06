@@ -1,1 +1,2 @@
 yolo detect train model=ultralytics/cfg/models/11/Att_yaml/yolo11s-test.yaml data=ultralytics/cfg/datasets/coco-test.yaml batch=52 epochs=100 imgsz=640 workers=0 device=0 pretrained=weights/yolo11s.pt cache=True
+yolo detect train model=ultralytics/cfg/models/11/yolo11n-ufe-a6-1.yaml data=ultralytics/cfg/datasets/DUO.yaml batch=64 epochs=100 imgsz=640 workers=8 device=0 pretrained=weights/yolo11n.pt cache=True
