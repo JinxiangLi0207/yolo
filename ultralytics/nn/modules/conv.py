@@ -7,6 +7,7 @@ from typing import List
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 __all__ = (
     "Conv",
@@ -26,6 +27,7 @@ __all__ = (
     "SPDConv",
     "MSFF",
     "GatedMSFF",
+    "SGF",
 )
 
 
@@ -270,6 +272,48 @@ class GatedMSFF(nn.Module):
         y = x + self.alpha * gate * ms_feat
 
         return self.proj(y)
+
+
+class SGF(nn.Module):
+    """Semantic-guided signed gated fusion for the P3 small-object branch.
+
+    The module receives ``[P3, P4]``. P4 provides high-level semantics and is
+    projected and upsampled to P3 resolution. A signed gate in ``[-1, 1]`` can
+    either enhance target-related responses or suppress background responses.
+
+    Formula:
+        signed_gate = 2 * sigmoid(gate(P3, up(P4))) - 1
+        output = P3 + alpha * signed_gate * fused_feature
+    """
+
+    def __init__(self, channels, reduction=16, init_alpha=0.1):
+        super().__init__()
+        if not isinstance(channels, (list, tuple)) or len(channels) != 2:
+            raise ValueError(f"SGF expects two input channel values [P3, P4], but got {channels}.")
+
+        c_low, c_high = channels
+        hidden = max(8, c_low // reduction)
+
+        self.high_proj = Conv(c_high, c_low, k=1, s=1)
+        self.low_detail = Conv(c_low, c_low, k=3, s=1, g=c_low)
+        self.fuse = Conv(c_low * 2, c_low, k=1, s=1)
+        self.gate = nn.Sequential(
+            Conv(c_low * 2, hidden, k=1, s=1),
+            nn.Conv2d(hidden, c_low, kernel_size=1, bias=True),
+        )
+        self.alpha = nn.Parameter(torch.tensor(float(init_alpha)))
+
+    def forward(self, x):
+        if not isinstance(x, (list, tuple)) or len(x) != 2:
+            raise ValueError("SGF forward expects [P3_detail, P4_semantic].")
+
+        low, high = x
+        high = F.interpolate(self.high_proj(high), size=low.shape[-2:], mode="nearest")
+        detail = self.low_detail(low)
+        joint = torch.cat((detail, high), dim=1)
+        fused_feature = self.fuse(joint)
+        signed_gate = 2.0 * torch.sigmoid(self.gate(joint)) - 1.0
+        return low + self.alpha * signed_gate * fused_feature
 
 
 class Conv2(Conv):

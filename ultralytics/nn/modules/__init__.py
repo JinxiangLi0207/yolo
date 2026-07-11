@@ -76,6 +76,7 @@ from .conv import (
     LightConv,
     MSFF,
     RepConv,
+    SGF,
     SPDConv,
     SpatialAttention,
 )
@@ -185,4 +186,5 @@ __all__ = (
     "A2C2f",
     "SPDConv",
     "MSFF",
+    "SGF",
 )

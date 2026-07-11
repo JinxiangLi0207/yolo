@@ -64,6 +64,7 @@ from ultralytics.nn.modules import (
     ResNetLayer,
     RTDETRDecoder,
     SCDown,
+    SGF,
     SPDConv,
     Segment,
     TorchVision,
@@ -1725,6 +1726,13 @@ def parse_model(d, ch, verbose=True):
             args = [ch[f]]
         elif m is Concat:
             c2 = sum(ch[x] for x in f)
+
+        elif m is SGF:
+            input_channels = [ch[x] for x in f]
+            if len(input_channels) != 2:
+                raise ValueError(f"SGF expects exactly two input layers [P3, P4], but got from={f}.")
+            c2 = input_channels[0]
+            args = [input_channels, *args]
 
         # ✅ 在这里加：注意力模块（输入输出通道不变，但构造函数需要 channels）
         elif m in attn_modules:
