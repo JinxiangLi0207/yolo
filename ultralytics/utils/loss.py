@@ -231,12 +231,15 @@ class v8DetectionLoss:
 
         m = model.model[-1]  # Detect() module
         self.bce = nn.BCEWithLogitsLoss(reduction="none")
+        self.quality_bce = nn.BCEWithLogitsLoss(reduction="none")
         self.hyp = h
         self.stride = m.stride  # model strides
         self.nc = m.nc  # number of classes
         self.no = m.nc + m.reg_max * 4
         self.reg_max = m.reg_max
         self.device = device
+        if h.quality_loss_gain < 0:
+            raise ValueError("quality_loss_gain must be non-negative.")
         self.sqr = getattr(h, "sqr", False)
         if self.sqr and (h.sqr_gain < 0 or h.sqr_area_scale <= 0):
             raise ValueError("SQR requires sqr_gain >= 0 and sqr_area_scale > 0.")
@@ -297,13 +300,18 @@ class v8DetectionLoss:
     def __call__(self, preds: Any, batch: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
         """Calculate the sum of the loss for box, cls and dfl multiplied by batch size."""
         loss = torch.zeros(3, device=self.device)  # box, cls, dfl
-        feats = preds[1] if isinstance(preds, tuple) else preds
+        raw_preds = preds[1] if isinstance(preds, tuple) else preds
+        quality_preds = raw_preds.get("quality") if isinstance(raw_preds, dict) else None
+        feats = raw_preds["det"] if quality_preds is not None else raw_preds
         pred_distri, pred_scores = torch.cat([xi.view(feats[0].shape[0], self.no, -1) for xi in feats], 2).split(
             (self.reg_max * 4, self.nc), 1
         )
 
         pred_scores = pred_scores.permute(0, 2, 1).contiguous()
         pred_distri = pred_distri.permute(0, 2, 1).contiguous()
+        pred_quality = None
+        if quality_preds is not None:
+            pred_quality = torch.cat([q.view(q.shape[0], 1, -1) for q in quality_preds], 2).permute(0, 2, 1)
 
         dtype = pred_scores.dtype
         batch_size = pred_scores.shape[0]
@@ -333,6 +341,22 @@ class v8DetectionLoss:
 
         target_scores_sum = max(target_scores.sum(), 1)
 
+        quality_loss = torch.tensor(0.0, device=self.device)
+        if pred_quality is not None:
+            quality_targets = torch.zeros_like(pred_quality)
+            pred_boxes_px = pred_bboxes.detach() * stride_tensor
+            if fg_mask.any():
+                quality_targets[fg_mask] = bbox_iou(
+                    pred_boxes_px[fg_mask], target_bboxes[fg_mask], xywh=False
+                ).detach().clamp_(0, 1)
+
+            positive_weights = target_scores.sum(-1, keepdim=True).detach()
+            negative_weights = 0.75 * pred_quality.sigmoid().pow(2)
+            quality_weights = torch.where(fg_mask.unsqueeze(-1), positive_weights, negative_weights)
+            quality_loss = (
+                self.quality_bce(pred_quality, quality_targets) * quality_weights
+            ).sum() / target_scores_sum
+
         # Cls loss
         # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
         cls_loss = self.rcqfl(pred_scores, target_scores) if self.rcqfl is not None else self.bce(
@@ -359,6 +383,7 @@ class v8DetectionLoss:
 
         loss[0] *= self.hyp.box  # box gain
         loss[1] *= self.hyp.cls  # cls gain
+        loss[1] += quality_loss * self.hyp.quality_loss_gain
         loss[2] *= self.hyp.dfl  # dfl gain
 
         return loss * batch_size, loss.detach()  # loss(box, cls, dfl)

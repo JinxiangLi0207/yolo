@@ -57,6 +57,7 @@ from ultralytics.nn.modules import (
     LRPCHead,
     MSFF,
     Pose,
+    QualityDetect,
     RepC3,
     RepConv,
     RepNCSPELAN4,
@@ -412,6 +413,8 @@ class DetectionModel(BaseModel):
 
             def _forward(x):
                 """Perform a forward pass through the model, handling different Detect subclass types accordingly."""
+                if isinstance(m, QualityDetect):
+                    return self.forward(x)["det"]
                 if self.end2end:
                     return self.forward(x)["one2many"]
                 return self.forward(x)[0] if isinstance(m, (Segment, YOLOESegment, Pose, OBB)) else self.forward(x)
@@ -1748,12 +1751,23 @@ def parse_model(d, ch, verbose=True):
 
 
         elif m in frozenset(
-            {Detect, WorldDetect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB, ImagePoolingAttn, v10Detect}
+            {
+                Detect,
+                QualityDetect,
+                WorldDetect,
+                YOLOEDetect,
+                Segment,
+                YOLOESegment,
+                Pose,
+                OBB,
+                ImagePoolingAttn,
+                v10Detect,
+            }
         ):
             args.append([ch[x] for x in f])
             if m is Segment or m is YOLOESegment:
                 args[2] = make_divisible(min(args[2], max_channels) * width, 8)
-            if m in {Detect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB}:
+            if m in {Detect, QualityDetect, YOLOEDetect, Segment, YOLOESegment, Pose, OBB}:
                 m.legacy = legacy
         elif m is RTDETRDecoder:  # special case, channels arg must be passed in index 1
             args.insert(1, [ch[x] for x in f])

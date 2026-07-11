@@ -18,7 +18,18 @@ from .conv import Conv, DWConv
 from .transformer import MLP, DeformableTransformerDecoder, DeformableTransformerDecoderLayer
 from .utils import bias_init_with_prob, linear_init
 
-__all__ = "Detect", "Segment", "Pose", "Classify", "OBB", "RTDETRDecoder", "v10Detect", "YOLOEDetect", "YOLOESegment"
+__all__ = (
+    "Detect",
+    "QualityDetect",
+    "Segment",
+    "Pose",
+    "Classify",
+    "OBB",
+    "RTDETRDecoder",
+    "v10Detect",
+    "YOLOEDetect",
+    "YOLOESegment",
+)
 
 
 class Detect(nn.Module):
@@ -227,6 +238,43 @@ class Detect(nn.Module):
         scores, index = scores.flatten(1).topk(min(max_det, anchors))
         i = torch.arange(batch_size)[..., None]  # batch indices
         return torch.cat([boxes[i, index // nc], scores[..., None], (index % nc)[..., None].float()], dim=-1)
+
+
+class QualityDetect(Detect):
+    """YOLO detection head with lightweight localization-quality prediction."""
+
+    def __init__(self, nc: int = 80, quality_power: float = 0.5, ch: Tuple = ()):
+        super().__init__(nc, ch)
+        if quality_power < 0:
+            raise ValueError("QualityDetect requires quality_power >= 0.")
+        self.quality_power = quality_power
+        c4 = max(16, ch[0] // 4)
+        self.cv4 = nn.ModuleList(
+            nn.Sequential(DWConv(x, x, 3), Conv(x, c4, 1), nn.Conv2d(c4, 1, 1)) for x in ch
+        )
+
+    def forward(self, x: List[torch.Tensor]) -> Union[dict, Tuple, torch.Tensor]:
+        """Return detection logits and quality logits during training, and calibrated scores during inference."""
+        quality = [self.cv4[i](x[i]) for i in range(self.nl)]
+        det = [torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1) for i in range(self.nl)]
+        raw = {"det": det, "quality": quality}
+        if self.training:
+            return raw
+
+        y = self._inference(det)
+        quality_scores = torch.cat([q.view(q.shape[0], 1, -1) for q in quality], 2).sigmoid()
+        quality_scores = quality_scores.pow(self.quality_power)
+        if self.export and self.format == "imx":
+            boxes, scores = y
+            return boxes, scores * quality_scores.permute(0, 2, 1)
+        y = torch.cat((y[:, :4], y[:, 4:] * quality_scores), 1)
+        return y if self.export else (y, raw)
+
+    def bias_init(self):
+        """Initialize detection biases and use a sparse-object prior for quality prediction."""
+        super().bias_init()
+        for branch in self.cv4:
+            branch[-1].bias.data.fill_(math.log(0.01 / 0.99))
 
 
 class Segment(Detect):

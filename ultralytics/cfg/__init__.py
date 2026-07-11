@@ -151,6 +151,7 @@ CFG_FLOAT_KEYS = frozenset(
         "dfl",
         "rcqfl_gamma",
         "sqr_gain",
+        "quality_loss_gain",
         "degrees",
         "shear",
         "time",
