@@ -6,6 +6,7 @@ from copy import copy
 from typing import Any, Dict, List, Optional
 
 import numpy as np
+import torch
 import torch.nn as nn
 
 from ultralytics.data import build_dataloader, build_yolo_dataset
@@ -82,12 +83,39 @@ class DetectionTrainer(BaseTrainer):
         assert mode in {"train", "val"}, f"Mode must be 'train' or 'val', not {mode}."
         with torch_distributed_zero_first(rank):  # init dataset *.cache only once if DDP
             dataset = self.build_dataset(dataset_path, mode, batch_size)
+        if mode == "train" and self.args.rcqfl:
+            self._set_rcqfl_class_weights(dataset)
         shuffle = mode == "train"
         if getattr(dataset, "rect", False) and shuffle:
             LOGGER.warning("'rect=True' is incompatible with DataLoader shuffle, setting shuffle=False")
             shuffle = False
         workers = self.args.workers if mode == "train" else self.args.workers * 2
         return build_dataloader(dataset, batch_size, workers, shuffle, rank)  # return dataloader
+
+    def _set_rcqfl_class_weights(self, dataset) -> None:
+        """Compute tempered effective-number weights from training labels and attach them to the model."""
+        counts = np.zeros(self.data["nc"], dtype=np.float64)
+        for label in dataset.labels:
+            classes = label["cls"].reshape(-1).astype(np.int64)
+            counts += np.bincount(classes, minlength=self.data["nc"])
+
+        safe_counts = np.maximum(counts, 1.0)
+        beta = self.args.rcqfl_beta
+        effective_weights = (1.0 - beta) / (1.0 - np.power(beta, safe_counts))
+        weights = np.power(effective_weights, self.args.rcqfl_tau)
+        weights /= np.average(weights, weights=safe_counts)
+
+        class_weights = torch.as_tensor(weights, dtype=torch.float32, device=self.device)
+        model = de_parallel(self.model)
+        model.rcqfl_class_weights = class_weights
+        if getattr(model, "criterion", None) is not None and getattr(model.criterion, "rcqfl", None) is not None:
+            model.criterion.rcqfl.set_class_weights(class_weights)
+
+        names = self.data["names"]
+        summary = ", ".join(
+            f"{names[i]}: count={int(counts[i])}, weight={weights[i]:.3f}" for i in range(len(counts))
+        )
+        LOGGER.info(f"RCQFL class statistics: {summary}")
 
     def preprocess_batch(self, batch: Dict) -> Dict:
         """

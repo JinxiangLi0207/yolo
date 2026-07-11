@@ -84,6 +84,33 @@ class FocalLoss(nn.Module):
         return loss.mean(1).sum()
 
 
+class RareClassAwareQualityFocalLoss(nn.Module):
+    """Rare-class-aware residual quality focal loss for dense classification."""
+
+    def __init__(self, class_weights: torch.Tensor, gamma: float = 2.0):
+        super().__init__()
+        self.register_buffer("class_weights", class_weights.float())
+        self.gamma = gamma
+
+    def set_class_weights(self, class_weights: torch.Tensor) -> None:
+        """Update class weights after the training dataset has been built."""
+        self.class_weights = class_weights.to(device=self.class_weights.device, dtype=self.class_weights.dtype)
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+        """Return element-wise RCQFL using task-aligned quality targets."""
+        target = target.to(dtype=pred.dtype)
+        base_loss = F.binary_cross_entropy_with_logits(pred, target, reduction="none")
+        quality_gap = (target - pred.sigmoid()).abs().pow(self.gamma)
+
+        # Keep negative classes at weight 1.0; class balancing applies only to assigned positives.
+        positive = target.gt(0)
+        class_weights = self.class_weights.to(device=pred.device, dtype=pred.dtype).view(1, 1, -1)
+        balance = torch.where(positive, class_weights, torch.ones_like(target))
+
+        # Residual modulation retains the BCE gradient while emphasizing hard, low-quality predictions.
+        return base_loss * (1.0 + quality_gap) * balance
+
+
 class DFLoss(nn.Module):
     """Criterion class for computing Distribution Focal Loss (DFL)."""
 
@@ -207,6 +234,10 @@ class v8DetectionLoss:
         self.no = m.nc + m.reg_max * 4
         self.reg_max = m.reg_max
         self.device = device
+        self.rcqfl = None
+        if getattr(h, "rcqfl", False):
+            class_weights = getattr(model, "rcqfl_class_weights", torch.ones(self.nc, device=device))
+            self.rcqfl = RareClassAwareQualityFocalLoss(class_weights, gamma=h.rcqfl_gamma).to(device)
 
         self.use_dfl = m.reg_max > 1
 
@@ -281,7 +312,10 @@ class v8DetectionLoss:
 
         # Cls loss
         # loss[1] = self.varifocal_loss(pred_scores, target_scores, target_labels) / target_scores_sum  # VFL way
-        loss[1] = self.bce(pred_scores, target_scores.to(dtype)).sum() / target_scores_sum  # BCE
+        cls_loss = self.rcqfl(pred_scores, target_scores) if self.rcqfl is not None else self.bce(
+            pred_scores, target_scores.to(dtype)
+        )
+        loss[1] = cls_loss.sum() / target_scores_sum
 
         # Bbox loss
         if fg_mask.sum():

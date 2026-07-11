@@ -149,6 +149,7 @@ CFG_FLOAT_KEYS = frozenset(
         "box",
         "cls",
         "dfl",
+        "rcqfl_gamma",
         "degrees",
         "shear",
         "time",
@@ -181,6 +182,8 @@ CFG_FRACTION_KEYS = frozenset(
         "conf",
         "iou",
         "fraction",
+        "rcqfl_beta",
+        "rcqfl_tau",
     }
 )
 CFG_INT_KEYS = frozenset(
@@ -233,6 +236,7 @@ CFG_BOOL_KEYS = frozenset(
         "nms",
         "profile",
         "multi_scale",
+        "rcqfl",
     }
 )
 
