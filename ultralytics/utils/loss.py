@@ -348,7 +348,7 @@ class v8DetectionLoss:
             if fg_mask.any():
                 quality_targets[fg_mask] = bbox_iou(
                     pred_boxes_px[fg_mask], target_bboxes[fg_mask], xywh=False
-                ).detach().clamp_(0, 1)
+                ).detach().clamp_(0, 1).to(dtype=quality_targets.dtype)
 
             positive_weights = target_scores.sum(-1, keepdim=True).detach()
             negative_weights = 0.75 * pred_quality.sigmoid().pow(2)
