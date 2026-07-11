@@ -102,6 +102,9 @@ rcqfl: False # (bool) enable rare-class-aware quality focal classification loss
 rcqfl_gamma: 2.0 # (float) quality focal exponent
 rcqfl_beta: 0.9999 # (float) effective-number class balancing factor
 rcqfl_tau: 0.5 # (float) class-weight tempering exponent
+sqr: False # (bool) enable small-object quality-aware regression weighting
+sqr_gain: 0.5 # (float) maximum additional weight for very small targets
+sqr_area_scale: 0.01 # (float) target-area ratio controlling weight decay
 pose: 12.0 # (float) pose loss gain
 kobj: 1.0 # (float) keypoint obj loss gain
 nbs: 64 # (int) nominal batch size

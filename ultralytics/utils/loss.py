@@ -149,9 +149,12 @@ class BboxLoss(nn.Module):
         target_scores: torch.Tensor,
         target_scores_sum: torch.Tensor,
         fg_mask: torch.Tensor,
+        regression_weights: torch.Tensor = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute IoU and DFL losses for bounding boxes."""
         weight = target_scores.sum(-1)[fg_mask].unsqueeze(-1)
+        if regression_weights is not None:
+            weight = weight * regression_weights
         iou = bbox_iou(pred_bboxes[fg_mask], target_bboxes[fg_mask], xywh=False, CIoU=True)
         loss_iou = ((1.0 - iou) * weight).sum() / target_scores_sum
 
@@ -234,6 +237,9 @@ class v8DetectionLoss:
         self.no = m.nc + m.reg_max * 4
         self.reg_max = m.reg_max
         self.device = device
+        self.sqr = getattr(h, "sqr", False)
+        if self.sqr and (h.sqr_gain < 0 or h.sqr_area_scale <= 0):
+            raise ValueError("SQR requires sqr_gain >= 0 and sqr_area_scale > 0.")
         self.rcqfl = None
         if getattr(h, "rcqfl", False):
             class_weights = getattr(model, "rcqfl_class_weights", torch.ones(self.nc, device=device))
@@ -270,6 +276,23 @@ class v8DetectionLoss:
             # pred_dist = pred_dist.view(b, a, c // 4, 4).transpose(2,3).softmax(3).matmul(self.proj.type(pred_dist.dtype))
             # pred_dist = (pred_dist.view(b, a, c // 4, 4).softmax(2) * self.proj.type(pred_dist.dtype).view(1, 1, -1, 1)).sum(2)
         return dist2bbox(pred_dist, anchor_points, xywh=False)
+
+    def get_sqr_weights(
+        self,
+        target_bboxes: torch.Tensor,
+        target_scores: torch.Tensor,
+        fg_mask: torch.Tensor,
+        imgsz: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return quality-normalized regression weights that emphasize small foreground targets."""
+        boxes = target_bboxes[fg_mask]
+        wh = (boxes[:, 2:4] - boxes[:, 0:2]).clamp_min(0)
+        area_ratio = wh.prod(-1) / imgsz.prod().clamp_min(1)
+        raw_weights = 1.0 + self.hyp.sqr_gain * torch.exp(-area_ratio / self.hyp.sqr_area_scale)
+
+        quality = target_scores.sum(-1)[fg_mask].detach().clamp_min(1e-6)
+        normalizer = (raw_weights * quality).sum() / quality.sum()
+        return (raw_weights / normalizer.clamp_min(1e-6)).unsqueeze(-1)
 
     def __call__(self, preds: Any, batch: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, torch.Tensor]:
         """Calculate the sum of the loss for box, cls and dfl multiplied by batch size."""
@@ -319,9 +342,19 @@ class v8DetectionLoss:
 
         # Bbox loss
         if fg_mask.sum():
+            regression_weights = (
+                self.get_sqr_weights(target_bboxes, target_scores, fg_mask, imgsz) if self.sqr else None
+            )
             target_bboxes /= stride_tensor
             loss[0], loss[2] = self.bbox_loss(
-                pred_distri, pred_bboxes, anchor_points, target_bboxes, target_scores, target_scores_sum, fg_mask
+                pred_distri,
+                pred_bboxes,
+                anchor_points,
+                target_bboxes,
+                target_scores,
+                target_scores_sum,
+                fg_mask,
+                regression_weights,
             )
 
         loss[0] *= self.hyp.box  # box gain
