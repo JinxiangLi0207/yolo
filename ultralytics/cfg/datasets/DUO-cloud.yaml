@@ -1,0 +1,13 @@
+# Ultralytics AGPL-3.0 License - https://ultralytics.com/license
+
+# DUO dataset location used by the two cloud training servers.
+path: /root/yolo/DUO
+train: images/train
+val: images/test
+test:
+
+names:
+  0: holothurian
+  1: echinus
+  2: scallop
+  3: starfish
