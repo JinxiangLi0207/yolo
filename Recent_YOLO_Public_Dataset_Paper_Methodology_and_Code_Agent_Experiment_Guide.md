@@ -3,7 +3,7 @@
 > 适用项目：基于 YOLO11n 的 DUO 水下小目标检测  
 > 研究目标：面向浑浊、低照度和小目标密集场景，形成一篇以算法改进为主的 SCI 二区/三区小论文  
 > 当前硬件：两台 RTX 3090 云服务器，分别记为“训练1”和“训练2”  
-> 当前状态：N6-A 分支自适应 power 未产生 Recall 与 mAP50-95 的共同改善，已停止；当前最优仍为 N4-QP3，下一实验转向全尺度一致的残差质量融合
+> 当前状态：N6-A、N6-B 均已失败并停止；当前最优仍为 N4-QP3；下一步转向训练阶段质量监督诊断与改进
 > 文档目标：将 11 篇真实论文的方法论转化为本项目当前可执行、可复现、可写入论文的实验路线  
 > 项目适配更新时间：2026-07-15
 
@@ -899,19 +899,26 @@ P4/P5 固定为 3.0，仅扫描 P3：
 score = class_score × [(1 - λ) + λ × quality_score ^ 3]
 ```
 
-N6-A 已经没有候选通过，因此当前执行本实验。先使用现有 N4 seed 0/1 权重做
-`λ ∈ {0, 0.25, 0.50, 0.625, 0.75, 0.875, 1.00}` 的离线验证，不重新训练；根据两个 seed
-共同选择一个固定值后，再用 seed 2 确认。完整命令见 `N6B_Residual_Quality_Fusion_Experiment_Guide.md`。
+N6-A 没有候选通过后，使用现有 N4 seed 0/1 权重完成了
+`λ ∈ {0, 0.25, 0.50, 0.625, 0.75, 0.875, 1.00}` 的离线验证。最优内部折中 `λ=0.875`
+的两种子均值为 `R=0.753691`、`mAP50-95=0.664850`，未达到 S/A 级条件。N6-B 已停止，
+不运行 seed 2。完整结果见 `work/N6B_Residual_Quality_Fusion_Experiment_Report.md`。
 
-#### N6-C：类别均衡质量监督
+#### N6-C：训练阶段质量监督
 
-只对正样本质量损失增加温和类别权重，不修改 YOLO11 原始分类损失：
+先执行 N6-C0，使用现有 N4 seed 0/1 权重统计 P3/P4/P5、各类别和目标尺度的质量预测偏差、
+MAE、quality-IoU 相关性与 Task-Aligned 正样本权重。完整命令见
+`N6C0_Quality_Branch_Diagnostic_Guide.md`。
+
+N6-C1 不预设为类别加权损失，而由两个 seed 的诊断共同选择：
 
 ```text
-Lquality = wc × BCE(q, IoU)
+P3 能排序但系统性低估 -> 小目标正样本质量目标平滑
+P3 相关性弱且监督权重低 -> 归一化尺度均衡正样本权重
+没有稳定的尺度/类别差异 -> 停止 N6-C
 ```
 
-目标是修复 scallop 退化。该实验必须独立于残差融合消融，不能一次加入两项后只报告最终结果。
+每次只实现一种机制，不同时改变质量标签和损失权重，也不修改 YOLO11 原始分类损失。
 
 ### 12.3 继续暂停的方向
 
@@ -1056,8 +1063,9 @@ N4,S0,yolo11n-quality-n4.yaml,QualityDetect,P3-P5,default+quality,640,96,50,0,pa
 C1A,N4,yolo11n-msff-quality-c1.yaml,MSFF+QualityDetect,strict-P3,default+quality,640,96,100,0,conditional_pass,/root/yolo/runs/detect/C1A_strict_p3_msff_quality_e100_b96_seed0,mAP50-95=0.662; retain for power sweep
 C1B,N4,yolo11n-msff-quality-c1-legacy.yaml,MSFF+QualityDetect,cascade-P3-P5,default+quality,640,96,100,0,stopped,/root/yolo/runs/detect/C1B_legacy_msff_quality_e100_b96_seed0,mAP50-95=0.654; do not continue
 N6A,N4,runtime-existing-weights,ScaleAdaptiveQualityPower,P3-P5,post-training-calibration,640,96,0,0,stopped,,no S/A candidate; cross-scale score mismatch
-N6B,N6A,runtime-existing-weights,ResidualQualityFusion,P3-P5,post-training-calibration,640,96,0,0,pending,,quality_mix sweep on N4 seeds 0/1
-N6C,N6B,yolo11n-quality-balanced.yaml,BalancedQualityLoss,P3-P5,balanced-quality,640,96,50,0,blocked,,conditional
+N6B,N6A,runtime-existing-weights,ResidualQualityFusion,P3-P5,post-training-calibration,640,96,0,0,stopped,,no S/A candidate on valid seeds 0/1
+N6C0,N6B,runtime-existing-weights,QualityIoUDiagnostics,P3-P5,none,640,96,0,0,pending,,run seeds 0/1 before selecting N6C1
+N6C1,N6C0,yolo11n-quality-train-aware.yaml,TrainingAwareQualitySupervision,P3-P5,diagnosis-dependent,640,96,50,0,blocked,,choose target smoothing or normalized positive reweighting
 ```
 
 状态值：
@@ -1145,7 +1153,7 @@ C1B  original A2 dataflow MSFF + QualityDetect，训练2
 50 epochs 结果：0.640 / 0.642 mAP50-95，均未通过筛选
 100 epochs 结果：C1A=0.662，C1B=0.654，C1B 终止
 当前结果：N4 power=3.0 达到 0.678852，所有相同 power 下均高于 C1A
-当前动作：N6-A 已停止；下一步实现 N6-B 全尺度一致的残差质量融合并先扫描 N4 seed 0
+当前动作：N6-A、N6-B 均已停止；下一步先做质量预测与真实 IoU 的分尺度诊断，再设计 N6-C
 晋级条件：N4-QP3 三种子平均 mAP50-95 相对 YOLO11n 提升至少 0.015
 ```
 
@@ -1162,8 +1170,8 @@ C1B  original A2 dataflow MSFF + QualityDetect，训练2
 
 ```text
 N6A  分支自适应 quality power，已失败并停止
-N6B  全尺度残差质量融合，先复用现有权重扫描 λ
-N6C  类别均衡质量监督
+N6B  全尺度残差质量融合，已失败并停止
+N6C  训练阶段质量监督改进，诊断后执行
 每次只增加一个变量
 ```
 
@@ -1204,7 +1212,7 @@ Jetson Nano 部署留到毕业大论文
 4. C1A/C1B 已完成 100 轮诊断；C1A 保留，C1B 终止，禁止继续训练 C1B。
 5. C1A/C1B 只能有 layer18 的 from 不同，其他结构、训练参数和预训练迁移数量必须一致。
 6. C1 只有超过同 seed N4 才能晋级；仅恢复 Recall 或仅超过 MSFF 不算成功。
-7. C1A 与 N6-A 已完成并停止；当前只执行 N6-B 全尺度残差质量融合，不再扩大 MSFF 或分支 power 搜索。
+7. C1A、N6-A、N6-B 已完成并停止；当前先执行分尺度质量-IoU 诊断，再根据证据实现 N6-C。
 8. 每个实验先完成导入、模型构建、前向/反向、1 epoch smoke test和 profiling，再进行50 epoch训练。
 9. 自动记录 results.csv、args.yaml、模型摘要、预训练迁移数量和实验报告。
 10. 发现 OOM、TaskAlignedAssigner CPU fallback、NaN 或数据划分变化时，将实验标记 invalid，不参与比较。
@@ -1254,12 +1262,11 @@ C1A/C1B 回答 MSFF 与 N4 是否互补
 
 ```text
 N4-QP3（三种子当前最优）
-> N6-B global residual quality fusion（当前实验）
-> N6-C class-balanced quality supervision
+> N6-C training-stage quality supervision（当前方向）
 > 第二数据集与机制分析
 > 额外轻量化（条件执行）
 ```
 
-当前 N4-QP3 的三种子配对平均 `mAP50-95 +0.019506`，已经形成稳定的高 IoU 定位增益，但 Recall 平均下降 `0.025974`，因此不能表述为所有指标全面提升。N6-B 的任务是保留至少约 0.015 的 mAP50-95 增益并恢复部分 Recall；若无法达到，则保留 N4-QP3，并将贡献准确限定为“高 IoU 定位质量与低开销权衡”，不能选择性忽略负指标。
+当前 N4-QP3 的三种子配对平均 `mAP50-95 +0.019506`，已经形成稳定的高 IoU 定位增益，但 Recall 平均下降 `0.025974`，因此不能表述为所有指标全面提升。N6-B 未能通过推理阶段残差融合恢复 Recall，说明下一步必须转向训练阶段质量监督。若 N6-C 仍无法改善，则保留 N4-QP3，并将贡献准确限定为“高 IoU 定位质量与低开销权衡”，不能选择性忽略负指标。
 
 最重要的不是训练更多模型，而是确保每个实验回答一个清楚问题，并且所有结论都能由公平、可复现的数据支持。

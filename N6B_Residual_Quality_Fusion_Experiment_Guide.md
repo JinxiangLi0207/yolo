@@ -76,6 +76,34 @@ QualityDetect 3.0 0.75
 
 如果权重路径不同，只修改 `weight`。若不是 `QualityDetect`，立即停止实验并检查权重。
 
+同时确认 Python 使用的是当前仓库代码，并且 `forward()` 中包含 `quality_mix`：
+
+```bash
+python - <<'PY'
+import inspect
+import ultralytics
+from ultralytics.nn.modules.head import QualityDetect
+
+print("ultralytics:", ultralytics.__file__)
+source = inspect.getsource(QualityDetect.forward)
+print("quality_mix active:", "quality_mix" in source)
+print(source)
+PY
+```
+
+必须看到：
+
+```text
+ultralytics: /root/yolo/ultralytics/__init__.py
+quality_mix active: True
+```
+
+若路径不是 `/root/yolo/ultralytics`，或输出为 `False`，不要开始扫描。
+
+### 4.1 端点检查
+
+完整扫描前先只运行 `quality_mix=0` 和 `quality_mix=1`。`mix=1` 应复现 QP3；`mix=0` 应产生不同结果。若两者所有指标完全相同，说明新融合代码未生效，本次实验必须标记为无效。
+
 ## 5. 训练2：seed 0 扫描
 
 训练2已知 seed 0 权重路径为：
@@ -114,6 +142,8 @@ for mix in mixes:
     print(f"EXACT seed0 mix={mix:g}: {exact}")
 PY
 ```
+
+2026-07-15 首次 seed 0 扫描因训练2未拉取最新代码而无效。同步代码后的重跑已通过端点检查并完成，结果见 `work/N6B_Residual_Quality_Fusion_Experiment_Report.md`。
 
 ## 6. 训练1：seed 1 扫描
 
@@ -188,9 +218,9 @@ mean mAP50 >= 0.842
 
 如果多个候选通过，先选择 mAP50-95 最高者；当差距小于 `0.001` 时，选择 Recall 更高者。只将一个固定 `quality_mix` 交给 seed 2 验证，不根据 seed 2 再调参。
 
-## 9. seed 2 确认命令
+## 9. seed 2 确认命令（本次不执行）
 
-将 `BEST_MIX` 替换为 seed 0/1 共同选出的唯一值：
+本命令仅保留为实验协议模板。由于 seed 0/1 没有候选通过晋级条件，本次禁止执行。仅当未来在独立 `dev_val` 上重新获得通过条件的唯一候选时，才将 `BEST_MIX` 替换后使用：
 
 ```bash
 BEST_MIX=0.75 python - <<'PY'
@@ -230,6 +260,10 @@ N6-B failed
 ```
 
 训练阶段优先分析 P3/P4/P5 质量预测与真实 IoU 的相关性，再决定是采用分尺度质量损失权重、正样本质量目标平滑，还是质量分支蒸馏。不得继续在 DUO test 上细化 `quality_mix` 小数，否则会形成明显的测试集调参。
+
+### 10.1 最终状态
+
+有效 seed 0/1 扫描没有候选达到 S 级或 A 级，N6-B 已停止，不运行 seed 2。当前最优模型仍为 N4-QP3，后续转向训练阶段质量监督诊断与改进。
 
 ## 11. 结果记录表
 
