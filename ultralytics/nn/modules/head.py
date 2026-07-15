@@ -246,6 +246,7 @@ class QualityDetect(Detect):
     def __init__(self, nc: int = 80, quality_power: Union[float, List[float], Tuple[float, ...]] = 0.5, ch: Tuple = ()):
         super().__init__(nc, ch)
         self.quality_power = self._normalize_quality_power(quality_power)
+        self.quality_mix = 1.0
         c4 = max(16, ch[0] // 4)
         self.cv4 = nn.ModuleList(
             nn.Sequential(DWConv(x, x, 3), Conv(x, c4, 1), nn.Conv2d(c4, 1, 1)) for x in ch
@@ -267,6 +268,14 @@ class QualityDetect(Detect):
             raise ValueError("QualityDetect requires quality_power >= 0.")
         return power
 
+    @staticmethod
+    def _normalize_quality_mix(quality_mix):
+        """Validate the residual quality-fusion coefficient."""
+        quality_mix = float(quality_mix)
+        if not 0.0 <= quality_mix <= 1.0:
+            raise ValueError("QualityDetect requires quality_mix in [0, 1].")
+        return quality_mix
+
     def forward(self, x: List[torch.Tensor]) -> Union[dict, Tuple, torch.Tensor]:
         """Return detection logits and quality logits during training, and calibrated scores during inference."""
         quality = [self.cv4[i](x[i]) for i in range(self.nl)]
@@ -282,6 +291,8 @@ class QualityDetect(Detect):
             quality_scores = [score.pow(power) for score, power in zip(quality_scores, quality_power)]
         else:
             quality_scores = [score.pow(quality_power) for score in quality_scores]
+        quality_mix = self._normalize_quality_mix(getattr(self, "quality_mix", 1.0))
+        quality_scores = [(1.0 - quality_mix) + quality_mix * score for score in quality_scores]
         quality_scores = torch.cat(quality_scores, 2)
         if self.export and self.format == "imx":
             boxes, scores = y
