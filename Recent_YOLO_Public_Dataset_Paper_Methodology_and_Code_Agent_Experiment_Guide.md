@@ -3,7 +3,7 @@
 > 适用项目：基于 YOLO11n 的 DUO 水下小目标检测  
 > 研究目标：面向浑浊、低照度和小目标密集场景，形成一篇以算法改进为主的 SCI 二区/三区小论文  
 > 当前硬件：两台 RTX 3090 云服务器，分别记为“训练1”和“训练2”  
-> 当前状态：N4 在 `power=3.0` 达到 0.678852 mAP50-95，所有相同 power 下均高于 C1A；C1A 终止多种子训练，当前使用既有 N4 seed 1/2 权重验证 QP3 稳定性  
+> 当前状态：N4-QP3 已完成三种子统一校准；N6 分支自适应 power 已实现，当前由训练1扫描 C1A、训练2扫描 N4 的相同 P3/P4/P5 power 组合  
 > 文档目标：将 11 篇真实论文的方法论转化为本项目当前可执行、可复现、可写入论文的实验路线  
 > 项目适配更新时间：2026-07-15
 
@@ -612,7 +612,29 @@ PY
 
 结论：C1A 的 mAP50-95 增长主要来自 QualityDetect 共享的 power 校准，而不是 MSFF 带来的额外总体 AP。C1A 在所有相同 power 下均未超过 N4，因此停止 C1A seeds 1/2；但 C1A 在 `power=3.0` 的 mAP50 比 N4 高 0.008952，scallop mAP50-95 高 0.013，可作为“MSFF 改善稀有小目标但轻微损害总体高 IoU AP”的结构消融。
 
-N4-QP3 seed 0 的最终校准结果为：`P=0.868320`、`R=0.745971`、`mAP50=0.844523`、`mAP50-95=0.678852`。相对 YOLO11n seed 0，mAP50-95 提升约 0.022。下一步无需重新训练，直接对既有 N4 seed 1/2 权重固定 `quality_power=3.0` 复验。
+N4-QP3 seed 0 的最终校准结果为：`P=0.868320`、`R=0.745971`、`mAP50=0.844523`、`mAP50-95=0.678852`。相对 YOLO11n seed 0，mAP50-95 提升约 0.022。seed 2 已使用既有权重完成复验；seed 1 若无法在两台服务器中找回，则按固定 QP3 配置补训。
+
+### 8.13 N4-QP3 seed 2 复验
+
+N4-QP3 seed 2 得到：`P=0.855858`、`R=0.740582`、`mAP50=0.846178`、`mAP50-95=0.676792`。相对同 seed YOLO11n，mAP50-95 从 0.659 提升 0.017792；seed 0/2 平均配对增益约为 0.019822，两个 seed 均超过 +0.010。
+
+当前风险集中在 Recall 和 scallop 稳定性：seed 2 Recall 相对基准下降约 0.038，scallop mAP50-95 从 0.524 降至 0.514；而 seed 0 scallop 从 0.510 升至 0.526。因此不能用两个 seed 完成结论，必须补齐 seed 1。
+
+训练2只找到 N4 seed 2 权重，但训练1已经找回 `/root/yolo/runs/detect/F1_n4_full_e100_b96_seed1/weights/best.pt`。因此无需补训，直接固定 `quality_power=3.0` 验证该 seed 1 权重。
+
+### 8.14 N4-QP3 三种子最终统计
+
+| 模型 | Precision | Recall | mAP50 | mAP50-95 |
+|---|---:|---:|---:|---:|
+| YOLO11n | 0.834333 ± 0.003055 | **0.773333 ± 0.008963** | 0.844000 ± 0.005000 | 0.657667 ± 0.001155 |
+| N4-QP3 | **0.858661 ± 0.008607** | 0.747360 ± 0.007568 | **0.844690 ± 0.001411** | **0.677172 ± 0.001525** |
+| 配对变化 | **+0.024327 ± 0.011652** | -0.025974 ± 0.016337 | +0.000690 ± 0.003599 | **+0.019506 ± 0.002103** |
+
+三个 seed 的 mAP50-95 配对增益分别为 `+0.021852/+0.018873/+0.017792`，全部超过 +0.017，说明 QP3 的高 IoU 排序增益稳定。平均 mAP50 基本不变，Precision 平均提高约 0.0243，Recall 平均下降约 0.0260。
+
+逐类 mAP50-95 平均变化为：holothurian `+0.025`、echinus `+0.032`、scallop `+0.002`、starfish `+0.020`。scallop 三个 seed 的变化为 `+0.016/-0.001/-0.010`，均值略正但方差较大，不能声称稀有类别稳定提升。
+
+N4-QP3 已通过当前开发协议的三种子晋级条件。后续不再继续搜索更高 power，也不再训练 C1A；算法实验转向残差质量融合或尺度自适应质量融合，以恢复 Recall 并降低 scallop 波动。
 
 ---
 
@@ -846,29 +868,36 @@ DUO：mAP50:95 三种子平均提升约 1.0 个百分点或以上（目标，不
 
 转向 N4 内部改进：
 
-#### N6-A：残差质量融合
+#### N6-A：分支自适应质量指数
 
-当前 N4：
-
-```text
-score = class_score × quality_score
-```
-
-候选公式：
+当前 N4-QP3：
 
 ```text
-score = class_score × [(1 - λ) + λ × quality_score]
+score_l = class_score_l × quality_score_l ^ power_l
 ```
 
-先使用现有 N4 权重做 `λ ∈ {0.25, 0.50, 0.75, 1.00}` 的离线验证，不重新训练。目标是降低质量分支对真实小目标的过度压制。
-
-#### N6-B：尺度自适应质量融合
+P4/P5 固定为 3.0，仅扫描 P3：
 
 ```text
-λP3 < λP4 < λP5
+[P3, P4, P5] ∈ {
+  [0.0, 3.0, 3.0],
+  [0.5, 3.0, 3.0],
+  [1.0, 3.0, 3.0],
+  [1.5, 3.0, 3.0],
+  [2.0, 3.0, 3.0],
+  [3.0, 3.0, 3.0]
+}
 ```
 
-P3 小目标定位质量波动较大，使用较弱质量抑制；P4/P5 使用更强质量排序。优先采用固定少量系数或三个可学习标量，避免复杂注意力。
+先使用现有 N4 与 C1A seed 0 权重做免训练验证。目标是让 P3 保留小目标候选和 Recall，同时让 P4/P5 保持 QP3 的高 IoU 排序。完整命令见 `N6_ScaleAware_Quality_Fusion_Experiment_Guide.md`。
+
+#### N6-B：残差质量融合
+
+```text
+score = class_score × [(1 - λ) + λ × quality_score ^ 3]
+```
+
+仅在 N6-A 没有候选通过时执行。先使用现有 N4 权重做 `λ ∈ {0.25, 0.50, 0.75, 1.00}` 的离线验证，不重新训练。
 
 #### N6-C：类别均衡质量监督
 
@@ -1022,8 +1051,8 @@ S0,,yolo11n.yaml,none,none,default,640,96,50,0,passed,/root/yolo/runs/detect/S0_
 N4,S0,yolo11n-quality-n4.yaml,QualityDetect,P3-P5,default+quality,640,96,50,0,passed,,quality_power=1.0
 C1A,N4,yolo11n-msff-quality-c1.yaml,MSFF+QualityDetect,strict-P3,default+quality,640,96,100,0,conditional_pass,/root/yolo/runs/detect/C1A_strict_p3_msff_quality_e100_b96_seed0,mAP50-95=0.662; retain for power sweep
 C1B,N4,yolo11n-msff-quality-c1-legacy.yaml,MSFF+QualityDetect,cascade-P3-P5,default+quality,640,96,100,0,stopped,/root/yolo/runs/detect/C1B_legacy_msff_quality_e100_b96_seed0,mAP50-95=0.654; do not continue
-N6A,N4,yolo11n-quality-residual.yaml,ResidualQualityFusion,P3-P5,default+quality,640,96,50,0,blocked,,run only if C1 fails
-N6B,N6A,yolo11n-quality-scale-aware.yaml,ScaleAwareQualityFusion,P3-P5,default+quality,640,96,50,0,blocked,,conditional
+N6A,N4,runtime-existing-weights,ScaleAdaptiveQualityPower,P3-P5,post-training-calibration,640,96,0,0,running,,N4 and C1A paired tuple sweep
+N6B,N6A,yolo11n-quality-residual.yaml,ResidualQualityFusion,P3-P5,default+quality,640,96,0,0,blocked,,run only if N6A fails
 N6C,N6B,yolo11n-quality-balanced.yaml,BalancedQualityLoss,P3-P5,balanced-quality,640,96,50,0,blocked,,conditional
 ```
 
@@ -1112,7 +1141,7 @@ C1B  original A2 dataflow MSFF + QualityDetect，训练2
 50 epochs 结果：0.640 / 0.642 mAP50-95，均未通过筛选
 100 epochs 结果：C1A=0.662，C1B=0.654，C1B 终止
 当前结果：N4 power=3.0 达到 0.678852，所有相同 power 下均高于 C1A
-当前动作：停止 C1A seeds 1/2；使用既有 N4 seed 1/2 权重复验 power=3.0
+当前动作：N6-A 免训练扫描；训练1运行 C1A，训练2运行 N4，相同 tuple 公平比较
 晋级条件：N4-QP3 三种子平均 mAP50-95 相对 YOLO11n 提升至少 0.015
 ```
 

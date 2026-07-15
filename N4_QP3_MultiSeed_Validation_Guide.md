@@ -126,7 +126,91 @@ find /root/yolo/runs/detect -path "*n4*e100*seed1*/weights/best.pt" -o \
 
 ## 4. 最终统计
 
-收到 seed 1/2 结果后，计算 seeds 0/1/2 的：
+### 4.1 当前已完成结果
+
+| seed | 模型 | Precision | Recall | mAP50 | mAP50-95 | scallop mAP50-95 |
+|---:|---|---:|---:|---:|---:|---:|
+| 0 | YOLO11n | 0.831 | 0.778 | 0.844 | 0.657 | 0.510 |
+| 0 | N4-QP3 | 0.868320 | 0.745971 | 0.844523 | **0.678852** | **0.526** |
+| 1 | YOLO11n | 0.837 | 0.763 | 0.839 | 0.657 | **0.509** |
+| 1 | N4-QP3 | 0.851804 | 0.755526 | 0.843370 | **0.675873** | 0.508 |
+| 2 | YOLO11n | 0.835 | 0.779 | 0.849 | 0.659 | **0.524** |
+| 2 | N4-QP3 | 0.855858 | 0.740582 | 0.846178 | **0.676792** | 0.514 |
+
+配对增益：
+
+```text
+seed 0: mAP50-95 +0.021852
+seed 1: mAP50-95 +0.018873
+seed 2: mAP50-95 +0.017792
+三种子平均增益 +0.019506 +/- 0.002103
+```
+
+三个 seed 均超过 `+0.017`，总体 mAP50-95 增益具有良好重复性。Recall 三种子平均下降约 0.026；scallop mAP50-95 的配对变化为 `+0.016/-0.001/-0.010`，稀有类别结论不稳定。
+
+### 4.2 seed 1 权重已找回
+
+训练2只找到：
+
+```text
+/root/yolo/runs/detect/F1_n4_full_e100_b96_seed2/weights/best.pt
+```
+
+随后在训练1找到 seed 1：
+
+```text
+/root/yolo/runs/detect/F1_n4_full_e100_b96_seed1/weights/best.pt
+```
+
+因此不需要重新训练 seed 1。直接在训练1使用该权重固定 `quality_power=3.0` 验证，命令见本文件第 3.2 节；`seed=1` 必须保持不变。
+
+以下重新训练命令仅作为权重损坏时的备用方案，当前不要执行。先检查配置：
+
+```bash
+python -c "from ultralytics import YOLO; m=YOLO('ultralytics/cfg/models/11/yolo11n-quality-n4-qp3.yaml'); print(type(m.model.model[-1]).__name__, m.model.model[-1].quality_power)"
+```
+
+期望输出包含：
+
+```text
+QualityDetect 3.0
+```
+
+然后执行：
+
+```bash
+yolo detect train \
+  model=ultralytics/cfg/models/11/yolo11n-quality-n4-qp3.yaml \
+  data=ultralytics/cfg/datasets/DUO.yaml \
+  batch=96 epochs=100 imgsz=640 workers=8 device=0 \
+  pretrained=weights/yolo11n.pt cache=True \
+  seed=1 deterministic=True \
+  quality_loss_gain=0.5 rcqfl=False sqr=False \
+  name=D2_N4_qp3_e100_b96_seed1
+```
+
+该训练会让 `best.pt` 按 QP3 验证指标选择，比复用旧 power 下选择的 checkpoint 更严格。不要用 seed 2 权重代替 seed 1，也不要从已有 N4 `best.pt` 微调。
+
+### 4.3 三种子统计
+
+三种子统计已经完成，标准差采用样本标准差（`n-1`）：
+
+| 模型 | Precision | Recall | mAP50 | mAP50-95 |
+|---|---:|---:|---:|---:|
+| YOLO11n | 0.834333 ± 0.003055 | **0.773333 ± 0.008963** | 0.844000 ± 0.005000 | 0.657667 ± 0.001155 |
+| N4-QP3 | **0.858661 ± 0.008607** | 0.747360 ± 0.007568 | **0.844690 ± 0.001411** | **0.677172 ± 0.001525** |
+| 配对变化 | **+0.024327 ± 0.011652** | -0.025974 ± 0.016337 | +0.000690 ± 0.003599 | **+0.019506 ± 0.002103** |
+
+逐类三种子均值：
+
+| 类别 | Baseline mAP50 | N4-QP3 mAP50 | 变化 | Baseline mAP50-95 | N4-QP3 mAP50-95 | 变化 |
+|---|---:|---:|---:|---:|---:|---:|
+| holothurian | 0.857 | 0.869 | +0.012 | 0.629 | 0.654 | **+0.025** |
+| echinus | 0.919 | 0.926 | +0.007 | 0.745 | 0.777 | **+0.032** |
+| scallop | 0.673 | 0.659 | -0.014 | 0.514 | 0.516 | +0.002 |
+| starfish | 0.926 | 0.925 | -0.001 | 0.742 | 0.762 | **+0.020** |
+
+正式报告应包含：
 
 ```text
 Precision mean +/- std
@@ -137,14 +221,16 @@ mAP50-95 mean +/- std
 相对同 seed YOLO11n 的配对差值
 ```
 
-建议 N4-QP3 晋级标准：
+N4-QP3 晋级检查：
 
 ```text
 平均 mAP50-95 提升 >= 0.015
 至少 2/3 个 seed 的 mAP50-95 提升 >= 0.010
-平均 mAP50 不低于 YOLO11n 超过 0.005
+平均 mAP50 相对 YOLO11n 的下降不超过 0.005
 scallop mAP50-95 不低于 YOLO11n
 ```
+
+四项均已满足，N4-QP3 正式通过当前开发协议下的三种子晋级检查。
 
 ## 5. 后续算法方向
 

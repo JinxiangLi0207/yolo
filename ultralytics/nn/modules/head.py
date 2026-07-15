@@ -243,15 +243,29 @@ class Detect(nn.Module):
 class QualityDetect(Detect):
     """YOLO detection head with lightweight localization-quality prediction."""
 
-    def __init__(self, nc: int = 80, quality_power: float = 0.5, ch: Tuple = ()):
+    def __init__(self, nc: int = 80, quality_power: Union[float, List[float], Tuple[float, ...]] = 0.5, ch: Tuple = ()):
         super().__init__(nc, ch)
-        if quality_power < 0:
-            raise ValueError("QualityDetect requires quality_power >= 0.")
-        self.quality_power = quality_power
+        self.quality_power = self._normalize_quality_power(quality_power)
         c4 = max(16, ch[0] // 4)
         self.cv4 = nn.ModuleList(
             nn.Sequential(DWConv(x, x, 3), Conv(x, c4, 1), nn.Conv2d(c4, 1, 1)) for x in ch
         )
+
+    def _normalize_quality_power(self, quality_power):
+        """Validate scalar or per-level quality exponents while preserving checkpoint compatibility."""
+        if isinstance(quality_power, (list, tuple)):
+            if len(quality_power) != self.nl:
+                raise ValueError(
+                    f"QualityDetect requires {self.nl} per-level quality powers, but received {len(quality_power)}."
+                )
+            powers = tuple(float(power) for power in quality_power)
+            if any(power < 0 for power in powers):
+                raise ValueError("QualityDetect requires every quality power to be >= 0.")
+            return powers
+        power = float(quality_power)
+        if power < 0:
+            raise ValueError("QualityDetect requires quality_power >= 0.")
+        return power
 
     def forward(self, x: List[torch.Tensor]) -> Union[dict, Tuple, torch.Tensor]:
         """Return detection logits and quality logits during training, and calibrated scores during inference."""
@@ -262,8 +276,13 @@ class QualityDetect(Detect):
             return raw
 
         y = self._inference(det)
-        quality_scores = torch.cat([q.view(q.shape[0], 1, -1) for q in quality], 2).sigmoid()
-        quality_scores = quality_scores.pow(self.quality_power)
+        quality_power = self._normalize_quality_power(self.quality_power)
+        quality_scores = [q.view(q.shape[0], 1, -1).sigmoid() for q in quality]
+        if isinstance(quality_power, tuple):
+            quality_scores = [score.pow(power) for score, power in zip(quality_scores, quality_power)]
+        else:
+            quality_scores = [score.pow(quality_power) for score in quality_scores]
+        quality_scores = torch.cat(quality_scores, 2)
         if self.export and self.format == "imx":
             boxes, scores = y
             return boxes, scores * quality_scores.permute(0, 2, 1)
