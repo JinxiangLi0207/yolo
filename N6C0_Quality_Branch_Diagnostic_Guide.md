@@ -46,6 +46,14 @@ high_iou_low_q_rate    IoU>=0.7 但 quality<0.5 的比例
 
 ## 4. 训练2：分析 seed0
 
+先确认已拉取包含 `build_diagnostic_criterion` 的最新脚本：
+
+```bash
+grep -n "build_diagnostic_criterion" quality_iou_diagnostic.py
+```
+
+若没有输出，说明服务器仍是旧代码，不要运行诊断。
+
 ```bash
 cd /root/yolo
 python quality_iou_diagnostic.py \

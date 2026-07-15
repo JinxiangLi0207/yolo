@@ -8,6 +8,7 @@ from pathlib import Path
 import torch
 
 from ultralytics import YOLO
+from ultralytics.cfg import get_cfg
 from ultralytics.models.yolo.detect import DetectionValidator
 from ultralytics.nn.modules import QualityDetect
 from ultralytics.utils.metrics import bbox_iou
@@ -233,6 +234,16 @@ def parse_args():
     return parser.parse_args()
 
 
+def build_diagnostic_criterion(model):
+    """Build the loss helper with full defaults while preserving checkpoint inference arguments."""
+    checkpoint_args = model.args
+    model.args = get_cfg(overrides=checkpoint_args)
+    try:
+        return model.init_criterion()
+    finally:
+        model.args = checkpoint_args
+
+
 def main():
     args = parse_args()
     device = select_device(args.device, batch=args.batch)
@@ -261,7 +272,7 @@ def main():
             "exist_ok": True,
         }
     )
-    validator.criterion = yolo.model.init_criterion()
+    validator.criterion = build_diagnostic_criterion(yolo.model)
     validator.class_names = yolo.model.names
     validator(model=yolo.model)
     validator.write_reports(validator.save_dir)
